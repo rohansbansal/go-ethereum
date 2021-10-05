@@ -320,6 +320,9 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 		// Increment the nonce for the next transaction
 		st.state.SetNonce(msg.From(), st.state.GetNonce(sender.Address())+1)
 		ret, st.gas, vmerr = st.evm.Call(sender, st.to(), st.data, st.gas, st.value)
+		// if vmerr == InvalidStateAccessErr {
+		// 	return nil, InvalidStateAccessErr
+		// }
 	}
 
 	if !london {

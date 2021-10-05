@@ -36,6 +36,10 @@ type Config struct {
 	JumpTable [256]*operation // EVM instruction table, automatically populated if unset
 
 	ExtraEips []int // Additional EIPS that are to be enabled
+
+	// RequireAccessList requires that any state touched by the EVM must be declared in the
+	// access list
+	RequireAccessList bool
 }
 
 // ScopeContext contains the things that are per-call, such as stack and memory,

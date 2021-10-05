@@ -107,6 +107,8 @@ const (
 )
 
 // 0x50 range - 'storage' and execution.
+// Note: these are the opcodes that we need to modify to require
+// that state access is serialized
 const (
 	POP      OpCode = 0x50
 	MLOAD    OpCode = 0x51

@@ -508,7 +508,11 @@ func opMstore8(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]
 func opSload(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
 	loc := scope.Stack.peek()
 	hash := common.Hash(loc.Bytes32())
-	val := interpreter.evm.StateDB.GetState(scope.Contract.Address(), hash)
+	addr := scope.Contract.Address()
+	if interpreter.cfg.RequireAccessList && !interpreter.evm.StateDB.AddressInAccessList(addr) {
+		return nil, ErrInvalidStateAccess
+	}
+	val := interpreter.evm.StateDB.GetState(addr, hash)
 	loc.SetBytes(val.Bytes())
 	return nil, nil
 }
@@ -516,7 +520,11 @@ func opSload(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]by
 func opSstore(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
 	loc := scope.Stack.pop()
 	val := scope.Stack.pop()
-	interpreter.evm.StateDB.SetState(scope.Contract.Address(),
+	addr := scope.Contract.Address()
+	if interpreter.cfg.RequireAccessList && !interpreter.evm.StateDB.AddressInAccessList(addr) {
+		return nil, ErrInvalidStateAccess
+	}
+	interpreter.evm.StateDB.SetState(addr,
 		loc.Bytes32(), val.Bytes32())
 	return nil, nil
 }
