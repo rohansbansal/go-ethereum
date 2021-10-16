@@ -19,6 +19,7 @@ package core
 import (
 	"fmt"
 	"math/big"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
@@ -52,28 +53,74 @@ var (
 	code []byte
 )
 
-func init() {
-	gopath := os.Getenv("GOPATH")
-	counterSrc, err := filepath.Abs(gopath + "/src/github.com/ava-labs/coreth/examples/counter/counter.sol")
-	if err != nil {
-		panic(err)
-	}
-	contracts, err := compiler.CompileSolidity("", counterSrc)
-	if err != nil {
-		panic(err)
-	}
-	contract, _ := contracts[fmt.Sprintf("%s:%s", counterSrc, "Counter")]
-	code = common.Hex2Bytes(contract.Code[2:])
-}
-
 // Benchmarks large blocks with value transfers to non-existing accounts
-func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, blockGenerator func(int, *BlockGen), requireAccessList bool) {
+func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, numTxs int, requireAccessList bool) {
 	// Generate the original common chain segment and the two competing forks
 	engine := ethash.NewFaker()
 	db := rawdb.NewMemoryDatabase()
 	genesis := gspec.MustCommit(db)
 
-	shared, _ := GenerateChain(gspec.Config, genesis, engine, db, numBlocks, blockGenerator)
+	gopath := os.Getenv("GOPATH")
+	contractSrc, err := filepath.Abs(gopath + "/src/github.com/ethereum/go-ethereum/core/Owner.sol")
+	if err != nil {
+		b.Fatal(err)
+	}
+	contracts, err := compiler.CompileSolidity("", contractSrc)
+	if err != nil {
+		b.Fatal(err)
+	}
+	numContracts := 10
+	contractAddrs := make([]common.Address, 0, numContracts)
+	contract, _ := contracts[fmt.Sprintf("%s:%s", contractSrc, "Owner")]
+	code := common.Hex2Bytes(contract.Code[2:])
+	generateContractChain, _ := GenerateChain(gspec.Config, genesis, engine, db, 1, func(i int, block *BlockGen) {
+		for i := 0; i < numContracts; i++ {
+			tx, err := types.SignTx(types.NewContractCreation(uint64(i), common.Big0, 1_000_000, common.Big1, code), signer, testBankKey)
+			if err != nil {
+				b.Fatal(err)
+			}
+			block.AddTx(tx)
+		}
+	})
+	// Insert the block craeted by [generateContractChain] into a dummy chain first
+	// to gather the created contract addresses.
+	{
+		// Import the genertate contract chain to get the receipts
+		diskdb := rawdb.NewMemoryDatabase()
+		gspec.MustCommit(diskdb)
+
+		chain, err := NewBlockChain(diskdb, nil, gspec.Config, engine, vm.Config{
+			RequireAccessList: requireAccessList,
+		}, nil, nil)
+		if err != nil {
+			b.Fatalf("failed to create tester chain: %v", err)
+		}
+		if _, err := chain.InsertChain(generateContractChain); err != nil {
+			b.Fatalf("failed to insert shared chain: %v", err)
+		}
+		receipts := chain.GetReceiptsByHash(chain.CurrentBlock().Hash())
+		for _, receipt := range receipts {
+			contractAddrs = append(contractAddrs, receipt.ContractAddress)
+		}
+	}
+
+	callDataMissingAddress := common.Hex2Bytes("a6f9dae1000000000000000000000000")
+	blockGenerator := func(i int, block *BlockGen) {
+		block.SetCoinbase(common.Address{1})
+
+		for txi := 0; txi < numTxs; txi++ {
+			uniq := uint64(i*numTxs + txi + numContracts)
+			addr := common.Address{byte(txi)}
+			modifiedCallData := append(callDataMissingAddress, addr.Bytes()...)
+			tx, err := types.SignTx(types.NewTransaction(uniq, contractAddrs[rand.Intn(10)], big.NewInt(1), 50_000, big.NewInt(1), modifiedCallData), signer, testBankKey)
+			if err != nil {
+				b.Error(err)
+			}
+			block.AddTx(tx)
+		}
+	}
+	shared, _ := GenerateChain(gspec.Config, generateContractChain[0], engine, db, numBlocks, blockGenerator)
+	blocks := append(generateContractChain, shared...)
 	b.StopTimer()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -88,7 +135,7 @@ func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, blockGenerato
 			b.Fatalf("failed to create tester chain: %v", err)
 		}
 		b.StartTimer()
-		if _, err := chain.InsertChain(shared); err != nil {
+		if _, err := chain.InsertChain(blocks); err != nil {
 			b.Fatalf("failed to insert shared chain: %v", err)
 		}
 		b.StopTimer()
@@ -96,17 +143,5 @@ func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, blockGenerato
 }
 
 func BenchmarkSimpleBlockTransactionExecution(b *testing.B) {
-	numTxs := 1000
-	benchmarkArbitraryBlockExecution(b, 10, func(i int, block *BlockGen) {
-		block.SetCoinbase(common.Address{1})
-
-		for txi := 0; txi < numTxs; txi++ {
-			uniq := uint64(i*numTxs + txi)
-			tx, err := types.SignTx(types.NewTransaction(uniq, testBankAddress, big.NewInt(1), params.TxGas, big.NewInt(1), nil), signer, testBankKey)
-			if err != nil {
-				b.Error(err)
-			}
-			block.AddTx(tx)
-		}
-	}, false)
+	benchmarkArbitraryBlockExecution(b, 10, 10, false)
 }

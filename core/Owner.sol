@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0
 
-pragma solidity >=0.7.0 <0.8.2;
+pragma solidity >=0.7.0 <0.8.7;
 
 /**
  * @title Owner
@@ -36,7 +36,7 @@ contract Owner {
      * @dev Change owner
      * @param newOwner address of new owner
      */
-    function changeOwner(address payable newOwner) public isOwner {
+    function changeOwner(address payable newOwner) public {
         emit OwnerSet(owner, newOwner);
         owner = newOwner;
     }
