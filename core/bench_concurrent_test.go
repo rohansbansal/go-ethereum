@@ -61,7 +61,7 @@ func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, numTxs int, r
 	genesis := gspec.MustCommit(db)
 
 	gopath := os.Getenv("GOPATH")
-	contractSrc, err := filepath.Abs(gopath + "/src/github.com/ethereum/go-ethereum/core/Owner.sol")
+	contractSrc, err := filepath.Abs(gopath + "/src/github.com/ethereum/go-ethereum/core/Storage.sol")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -71,9 +71,9 @@ func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, numTxs int, r
 	}
 	numContracts := 10
 	contractAddrs := make([]common.Address, 0, numContracts)
-	contract, exists := contracts[fmt.Sprintf("%s:%s", contractSrc, "Owner")]
+	contract, exists := contracts[fmt.Sprintf("%s:%s", contractSrc, "Storage")]
 	if !exists {
-		contract, exists = contracts["Owner.sol:Owner"]
+		contract, exists = contracts["Storage.sol:Storage"]
 	}
 	if !exists {
 		b.Fatal("contract doesn't exist")
