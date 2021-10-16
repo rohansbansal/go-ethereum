@@ -71,7 +71,13 @@ func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, numTxs int, r
 	}
 	numContracts := 10
 	contractAddrs := make([]common.Address, 0, numContracts)
-	contract, _ := contracts[fmt.Sprintf("%s:%s", contractSrc, "Owner")]
+	contract, exists := contracts[fmt.Sprintf("%s:%s", contractSrc, "Owner")]
+	if !exists {
+		contract, exists = contracts["Owner.sol:Owner"]
+	}
+	if !exists {
+		b.Fatal("contract doesn't exist")
+	}
 	code := common.Hex2Bytes(contract.Code[2:])
 	generateContractChain, _ := GenerateChain(gspec.Config, genesis, engine, db, 1, func(i int, block *BlockGen) {
 		for i := 0; i < numContracts; i++ {
