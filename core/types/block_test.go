@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"hash"
 	"math/big"
+	"path"
 	"reflect"
 	"testing"
 
@@ -213,6 +214,51 @@ func BenchmarkEncodeBlock(b *testing.B) {
 		benchBuffer.Reset()
 		if err := rlp.Encode(benchBuffer, block); err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+func TestEncodeBlocks(t *testing.T) {
+	blocks := []*Block{
+		makeBenchBlock(),
+		makeBenchBlock(),
+		makeBenchBlock(),
+	}
+
+	buffer := bytes.NewBuffer(make([]byte, 0, 32000))
+	if err := WriteBlocks(buffer, blocks); err != nil {
+		t.Fatal(err)
+	}
+
+	decodedBlocks, err := ReadBlocks(buffer.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(blocks) != len(decodedBlocks) {
+		t.Fatalf("expected decoded blocks (%d) == blocks (%d)", len(decodedBlocks), len(blocks))
+	}
+	for i, decodedBlock := range decodedBlocks {
+		if blocks[i].Hash() != decodedBlock.Hash() {
+			t.Fatalf("Expected hatches to match at index %d, found decoded block hash: %s, actual hash: %s", i, decodedBlock.Hash(), blocks[i].Hash())
+		}
+	}
+
+	tempFile := path.Join(t.TempDir(), "blocks")
+	if err := WriteBlocksToFile(tempFile, blocks); err != nil {
+		t.Fatal(err)
+	}
+
+	blocksFromFile, err := ReadBlocksFromFile(tempFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocks) != len(blocksFromFile) {
+		t.Fatalf("expected blocks from file (%d) == blocks (%d)", len(blocksFromFile), len(blocks))
+	}
+	for i, blockFromFile := range blocksFromFile {
+		if blocks[i].Hash() != blockFromFile.Hash() {
+			t.Fatalf("Expected hatches to match at index %d, found block from file hash: %s, actual hash: %s", i, blockFromFile.Hash(), blocks[i].Hash())
 		}
 	}
 }
