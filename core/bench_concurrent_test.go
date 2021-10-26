@@ -55,7 +55,8 @@ var (
 	code []byte
 )
 
-func genRandomAddrs(numBytes int, numKeys int) []*keystore.Key {
+// genRandomAddrs generates [numKeys] randomly generated private keys
+func genRandomAddrs(numKeys int) []*keystore.Key {
 	res := make([]*keystore.Key, numKeys)
 	for i := 1; i < numKeys; i++ {
 		res[i] = keystore.NewKeyForDirectICAP(cryptorand.Reader)
@@ -63,35 +64,9 @@ func genRandomAddrs(numBytes int, numKeys int) []*keystore.Key {
 	return res
 }
 
-func sendMoneyAddrs(b *testing.B, numKeys int) []*keystore.Key {
-	keys := genRandomAddrs(32, numKeys)
-	blockGenerator := func(numKeys int, block *BlockGen) {
-		block.SetCoinbase(common.Address{1})
-		for i := 0; i < numKeys; i++ {
-			unsignedTx := types.NewTransaction(block.TxNonce(testBankAddress), keys[i].Address, big.NewInt(1000000000000), 50_000, big.NewInt(1), nil)
-			tx, err := types.SignTx(unsignedTx, signer, testBankKey)
-			if err != nil {
-				b.Error(err)
-			}
-			block.AddTx(tx)
-		}
-	}
-	//shared, _ := GenerateChain(gspec.Config, generateContractChain[0], engine, db, 1, blockGenerator)
-	//blocks := append(generateContractChain, shared...)
-	//diskdb := rawdb.NewMemoryDatabase()
-	//gspec.MustCommit(diskdb)
-	//chain, err := NewBlockChain(diskdb, nil, gspec.Config, engine, vm.Config{
-	//	RequireAccessList: requireAccessList,
-	//}, nil, nil)
-	//if err != nil {
-	//	b.Fatalf("failed to create tester chain: %v", err)
-	//}
-	//if _, err := chain.InsertChain(blocks); err != nil {
-	//	b.Fatalf("failed to insert shared chain: %v", err)
-	//}
-	return keys
-}
-
+// generateRanodomExecution returns the list of blocks necessary to deploy [numContracts] and send dummy transactions from [numKeys] randomized
+// over which key is sending the transaction as well as which contract is being called. This will be done for [numTxs] per block across [numBlocks].
+// [requireAccessList] indicates whether the vmConfig will require a complete access list.
 func generateRandomExecution(b *testing.B, numContracts int, numBlocks int, numTxs int, numKeys int, requireAccessList bool) []*types.Block {
 	engine := ethash.NewFaker()
 	db := rawdb.NewMemoryDatabase()
@@ -145,14 +120,14 @@ func generateRandomExecution(b *testing.B, numContracts int, numBlocks int, numT
 			contractAddrs = append(contractAddrs, receipt.ContractAddress)
 		}
 	}
-	keys := sendMoneyAddrs(b, numKeys)
+	keys := genRandomAddrs(numKeys)
 	callDataMissingAddress := common.Hex2Bytes("6057361d000000000000000000000000")
 	blockGenerator := func(i int, block *BlockGen) {
 		block.SetCoinbase(common.Address{1})
 		for txi := 0; txi < numTxs; txi++ {
 			key := keys[rand.Intn(len(keys))]
-			modifiedCallData := append(callDataMissingAddress)
-			tx, err := types.SignTx(types.NewTransaction(block.TxNonce(testBankAddress), contractAddrs[rand.Intn(len(contractAddrs))], big.NewInt(0), 50_000, big.NewInt(1), modifiedCallData), signer, testBankKey)
+			modifiedCallData := append(callDataMissingAddress, key.Address.Bytes()...)
+			tx, err := types.SignTx(types.NewTransaction(block.TxNonce(key.Address), contractAddrs[rand.Intn(len(contractAddrs))], big.NewInt(0), 50_000, big.NewInt(1), modifiedCallData), signer, key.PrivateKey)
 			if err != nil {
 				b.Error(err)
 			}
