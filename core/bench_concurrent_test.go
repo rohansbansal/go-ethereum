@@ -38,7 +38,7 @@ var (
 	signer          = types.HomesteadSigner{}
 	testBankKey, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
 	testBankAddress = crypto.PubkeyToAddress(testBankKey.PublicKey)
-	bankFunds       = big.NewInt(100000000000000000)
+	bankFunds       = big.NewInt(999999999999999999)
 	gspec           = Genesis{
 		Config: params.TestPreLondonConfig,
 		Alloc: GenesisAlloc{
@@ -53,13 +53,58 @@ var (
 	code []byte
 )
 
-// Benchmarks large blocks with value transfers to non-existing accounts
-func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, numTxs int, requireAccessList bool) {
-	// Generate the original common chain segment and the two competing forks
+func genRandomAddrs(numBytes int, numKeys int) []common.Address {
+	possibleHex := "123456789abcdef"
+	genAddr := func() common.Address {
+		res := ""
+		for i := 0; i < numBytes*2; i++ {
+			res += string(possibleHex[rand.Intn(len(possibleHex))])
+		}
+		key, _ := crypto.HexToECDSA(res)
+		address := crypto.PubkeyToAddress(key.PublicKey)
+		return address
+	}
+	res := make([]common.Address, numKeys-1)
+	for i := 1; i < numKeys; i++ {
+		res[i-1] = genAddr()
+	}
+	return res
+}
+
+func sendMoneyAddrs(b *testing.B, numKeys int) []common.Address {
+	addrs := genRandomAddrs(32, numKeys)
+	blockGenerator := func(numKeys int, block *BlockGen) {
+		block.SetCoinbase(common.Address{1})
+		for i := 1; i < numKeys; i++ {
+			unsignedTx := types.NewTransaction(block.TxNonce(testBankAddress), addrs[i-1], big.NewInt(1000000000000), 50_000, big.NewInt(1), nil)
+			tx, err := types.SignTx(unsignedTx, signer, testBankKey)
+			if err != nil {
+				b.Error(err)
+			}
+			block.AddTx(tx)
+		}
+	}
+	//shared, _ := GenerateChain(gspec.Config, generateContractChain[0], engine, db, 1, blockGenerator)
+	//blocks := append(generateContractChain, shared...)
+	//diskdb := rawdb.NewMemoryDatabase()
+	//gspec.MustCommit(diskdb)
+	//chain, err := NewBlockChain(diskdb, nil, gspec.Config, engine, vm.Config{
+	//	RequireAccessList: requireAccessList,
+	//}, nil, nil)
+	//if err != nil {
+	//	b.Fatalf("failed to create tester chain: %v", err)
+	//}
+	//b.StartTimer()
+	//if _, err := chain.InsertChain(blocks); err != nil {
+	//	b.Fatalf("failed to insert shared chain: %v", err)
+	//}
+	return addrs
+}
+
+func generateRandomExecution(b *testing.B, numContracts int, numBlocks int, numTxs int, numKeys int, requireAccessList bool) {
 	engine := ethash.NewFaker()
 	db := rawdb.NewMemoryDatabase()
 	genesis := gspec.MustCommit(db)
-
 	gopath := os.Getenv("GOPATH")
 	contractSrc, err := filepath.Abs(gopath + "/src/github.com/ethereum/go-ethereum/core/Storage.sol")
 	if err != nil {
@@ -69,7 +114,9 @@ func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, numTxs int, r
 	if err != nil {
 		b.Fatal(err)
 	}
-	numContracts := 10
+	if err != nil {
+		b.Fatal(err)
+	}
 	contractAddrs := make([]common.Address, 0, numContracts)
 	contract, exists := contracts[fmt.Sprintf("%s:%s", contractSrc, "Storage")]
 	if !exists {
@@ -88,8 +135,6 @@ func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, numTxs int, r
 			block.AddTx(tx)
 		}
 	})
-	// Insert the block craeted by [generateContractChain] into a dummy chain first
-	// to gather the created contract addresses.
 	{
 		// Import the genertate contract chain to get the receipts
 		diskdb := rawdb.NewMemoryDatabase()
@@ -109,45 +154,117 @@ func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, numTxs int, r
 			contractAddrs = append(contractAddrs, receipt.ContractAddress)
 		}
 	}
-
-	callDataMissingAddress := common.Hex2Bytes("a6f9dae1000000000000000000000000")
+	addrs := sendMoneyAddrs(b, numKeys)
+	callDataMissingAddress := common.Hex2Bytes("6057361d000000000000000000000000")
 	blockGenerator := func(i int, block *BlockGen) {
 		block.SetCoinbase(common.Address{1})
-
 		for txi := 0; txi < numTxs; txi++ {
-			uniq := uint64(i*numTxs + txi + numContracts)
-			addr := common.Address{byte(txi)}
+			addr := addrs[rand.Intn(len(addrs))]
 			modifiedCallData := append(callDataMissingAddress, addr.Bytes()...)
-			tx, err := types.SignTx(types.NewTransaction(uniq, contractAddrs[rand.Intn(10)], big.NewInt(1), 50_000, big.NewInt(1), modifiedCallData), signer, testBankKey)
+			tx, err := types.SignTx(types.NewTransaction(block.TxNonce(testBankAddress), contractAddrs[rand.Intn(len(contractAddrs))], big.NewInt(0), 50_000, big.NewInt(1), modifiedCallData), signer, testBankKey)
 			if err != nil {
 				b.Error(err)
 			}
 			block.AddTx(tx)
 		}
 	}
-	shared, _ := GenerateChain(gspec.Config, generateContractChain[0], engine, db, numBlocks, blockGenerator)
-	blocks := append(generateContractChain, shared...)
-	b.StopTimer()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		// Import the shared chain and the original canonical one
-		diskdb := rawdb.NewMemoryDatabase()
-		gspec.MustCommit(diskdb)
-
-		chain, err := NewBlockChain(diskdb, nil, gspec.Config, engine, vm.Config{
-			RequireAccessList: requireAccessList,
-		}, nil, nil)
-		if err != nil {
-			b.Fatalf("failed to create tester chain: %v", err)
-		}
-		b.StartTimer()
-		if _, err := chain.InsertChain(blocks); err != nil {
-			b.Fatalf("failed to insert shared chain: %v", err)
-		}
-		b.StopTimer()
-	}
 }
 
+// Benchmarks large blocks with value transfers to non-existing accounts
+//func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, numTxs int, requireAccessList bool) {
+//	// Generate the original common chain segment and the two competing forks
+//	engine := ethash.NewFaker()
+//	db := rawdb.NewMemoryDatabase()
+//	genesis := gspec.MustCommit(db)
+//
+//	gopath := os.Getenv("GOPATH")
+//	contractSrc, err := filepath.Abs(gopath + "/src/github.com/ethereum/go-ethereum/core/Storage.sol")
+//	if err != nil {
+//		b.Fatal(err)
+//	}
+//	contracts, err := compiler.CompileSolidity("", contractSrc)
+//	if err != nil {
+//		b.Fatal(err)
+//	}
+//	numContracts := 10
+//	contractAddrs := make([]common.Address, 0, numContracts)
+//	contract, exists := contracts[fmt.Sprintf("%s:%s", contractSrc, "Storage")]
+//	if !exists {
+//		contract, exists = contracts["Storage.sol:Storage"]
+//	}
+//	if !exists {
+//		b.Fatal("contract doesn't exist")
+//	}
+//	code := common.Hex2Bytes(contract.Code[2:])
+//	generateContractChain, _ := GenerateChain(gspec.Config, genesis, engine, db, 1, func(i int, block *BlockGen) {
+//		for i := 0; i < numContracts; i++ {
+//			tx, err := types.SignTx(types.NewContractCreation(uint64(i), common.Big0, 1_000_000, common.Big1, code), signer, testBankKey)
+//			if err != nil {
+//				b.Fatal(err)
+//			}
+//			block.AddTx(tx)
+//		}
+//	})
+//	// Insert the block craeted by [generateContractChain] into a dummy chain first
+//	// to gather the created contract addresses.
+//	{
+//		// Import the genertate contract chain to get the receipts
+//		diskdb := rawdb.NewMemoryDatabase()
+//		gspec.MustCommit(diskdb)
+//
+//		chain, err := NewBlockChain(diskdb, nil, gspec.Config, engine, vm.Config{
+//			RequireAccessList: requireAccessList,
+//		}, nil, nil)
+//		if err != nil {
+//			b.Fatalf("failed to create tester chain: %v", err)
+//		}
+//		if _, err := chain.InsertChain(generateContractChain); err != nil {
+//			b.Fatalf("failed to insert shared chain: %v", err)
+//		}
+//		receipts := chain.GetReceiptsByHash(chain.CurrentBlock().Hash())
+//		for _, receipt := range receipts {
+//			contractAddrs = append(contractAddrs, receipt.ContractAddress)
+//		}
+//	}
+//	//Create a storage contract 0xefc81a8c
+//	//a6f9dae1
+//	callDataMissingAddress := common.Hex2Bytes("6057361d000000000000000000000000")
+//	blockGenerator := func(i int, block *BlockGen) {
+//		block.SetCoinbase(common.Address{1})
+//		for txi := 0; txi < numTxs; txi++ {
+//			uniq := uint64(i*numTxs + txi + numContracts)
+//			addr := common.Address{byte(txi)}
+//			modifiedCallData := append(callDataMissingAddress, addr.Bytes()...)
+//			tx, err := types.SignTx(types.NewTransaction(uniq, contractAddrs[rand.Intn(10)], big.NewInt(1), 50_000, big.NewInt(1), modifiedCallData), signer, testBankKey)
+//			if err != nil {
+//				b.Error(err)
+//			}
+//			block.AddTx(tx)
+//		}
+//	}
+//	shared, _ := GenerateChain(gspec.Config, generateContractChain[0], engine, db, numBlocks, blockGenerator)
+//	blocks := append(generateContractChain, shared...)
+//	b.StopTimer()
+//	b.ResetTimer()
+//	for i := 0; i < b.N; i++ {
+//		// Import the shared chain and the original canonical one
+//		diskdb := rawdb.NewMemoryDatabase()
+//		gspec.MustCommit(diskdb)
+//
+//		chain, err := NewBlockChain(diskdb, nil, gspec.Config, engine, vm.Config{
+//			RequireAccessList: requireAccessList,
+//		}, nil, nil)
+//		if err != nil {
+//			b.Fatalf("failed to create tester chain: %v", err)
+//		}
+//		b.StartTimer()
+//		if _, err := chain.InsertChain(blocks); err != nil {
+//			b.Fatalf("failed to insert shared chain: %v", err)
+//		}
+//		b.StopTimer()
+//	}
+//}
+//
 func BenchmarkSimpleBlockTransactionExecution(b *testing.B) {
 	benchmarkArbitraryBlockExecution(b, 10, 10, false)
 }
