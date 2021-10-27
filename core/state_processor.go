@@ -19,7 +19,7 @@ package core
 import (
 	"fmt"
 	"math/big"
-
+	"sync"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
@@ -49,6 +49,27 @@ func NewStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consen
 	}
 }
 
+func populateLocks(block *types.Block) map[common.Address]*sync.Mutex {
+	var res map[common.Address]*sync.Mutex
+	for _, tx := range block.Transactions() {
+		for _, address := range tx.AccessList() {
+			res[address.Address] = &sync.Mutex{}
+		}
+	}
+	return res
+}
+
+func TryLock(AccessList types.AccessList, lockSet map[common.Address]*sync.Mutex, addrConflictSet map[]){
+
+}
+
+func ReleaseLock(AccessList types.AccessList, lockSet map[common.Address]*sync.Mutex) {
+	for _, address := range AccessList {
+		lockSet[address.Address].Unlock()
+
+	}
+}
+
 // Process processes the state changes according to the Ethereum rules by running
 // the transaction messages using the statedb and applying any rewards to both
 // the processor (coinbase) and any included uncles.
@@ -73,6 +94,33 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	blockContext := NewEVMBlockContext(header, p.bc, nil)
 	vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, p.config, cfg)
 	// Iterate over and process the individual transactions
+	addrConflictSet := make(map[common.Address]bool)
+	txSynchronizer := make(chan struct{})
+	lock := &sync.Mutex{}
+	lockSet := populateLocks(block)
+	txSynchronizer <- struct{}{}
+	for i, tx := range block.Transactions() {
+		lock.Lock()
+		go func() {
+			if(TryLock(tx.AccessList())) {
+				msg, err := tx.AsMessage(types.MakeSigner(p.config, header.Number), header.BaseFee)
+				if err != nil {
+					return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+				}
+				statedb.Prepare(tx.Hash(), i)
+				receipt, err := applyTransaction(msg, p.config, p.bc, nil, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv)
+				if err != nil {
+					return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+				}
+				receipts = append(receipts, receipt)
+				allLogs = append(allLogs, receipt.Logs...)	
+				ReleaseLock(tx.AccessList())
+			}
+			else{
+
+			}
+		}
+	}
 	for i, tx := range block.Transactions() {
 		msg, err := tx.AsMessage(types.MakeSigner(p.config, header.Number), header.BaseFee)
 		if err != nil {
