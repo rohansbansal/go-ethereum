@@ -21,7 +21,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"math/big"
+	"os"
 	"reflect"
 	"sync/atomic"
 	"time"
@@ -383,3 +385,34 @@ func (b *Block) Hash() common.Hash {
 }
 
 type Blocks []*Block
+
+func WriteBlocks(w io.Writer, blocks Blocks) error {
+	return rlp.Encode(w, blocks)
+}
+
+func ReadBlocks(b []byte) ([]*Block, error) {
+	blocks := new(Blocks)
+	if err := rlp.DecodeBytes(b, blocks); err != nil {
+		return nil, err
+	}
+	return *blocks, nil
+}
+
+func WriteBlocksToFile(filename string, blocks Blocks) error {
+	f, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return WriteBlocks(f, blocks)
+}
+
+func ReadBlocksFromFile(filename string) ([]*Block, error) {
+	b, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	return ReadBlocks(b)
+}
