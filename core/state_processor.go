@@ -19,6 +19,7 @@ package core
 import (
 	"fmt"
 	"math/big"
+	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -71,9 +72,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		misc.ApplyDAOHardFork(statedb)
 	}
 	blockContext := NewEVMBlockContext(header, p.bc, nil)
-	vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, p.config, cfg)
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
+		vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, p.config, cfg)
 		msg, err := tx.AsMessage(types.MakeSigner(p.config, header.Number), header.BaseFee)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
@@ -104,17 +105,18 @@ func applyTransaction(msg types.Message, config *params.ChainConfig, bc ChainCon
 	}
 
 	// Update the state with pending changes.
-	var root []byte
+	// var root []byte
 	if config.IsByzantium(blockNumber) {
 		statedb.Finalise(true)
 	} else {
-		root = statedb.IntermediateRoot(config.IsEIP158(blockNumber)).Bytes()
+		statedb.IntermediateRoot(config.IsEIP158(blockNumber)).Bytes()
+		// root = statedb.IntermediateRoot(config.IsEIP158(blockNumber)).Bytes()
 	}
-	*usedGas += result.UsedGas
+	atomic.AddUint64(usedGas, result.UsedGas)
 
 	// Create a new receipt for the transaction, storing the intermediate root and gas used
 	// by the tx.
-	receipt := &types.Receipt{Type: tx.Type(), PostState: root, CumulativeGasUsed: *usedGas}
+	receipt := &types.Receipt{Type: tx.Type()}
 	if result.Failed() {
 		receipt.Status = types.ReceiptStatusFailed
 	} else {
