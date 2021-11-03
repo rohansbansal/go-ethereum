@@ -40,6 +40,14 @@ type revision struct {
 	journalIndex int
 }
 
+// journalTracker is used to track the journaling of an independent piece of computation.
+// this allows modifications made
+type journalTracker struct {
+	journal        *journal
+	validRevisions []revision
+	nextRevisionId int
+}
+
 var (
 	// emptyRoot is the known root hash of an empty trie.
 	emptyRoot = common.HexToHash("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421")
@@ -101,9 +109,7 @@ type StateDB struct {
 
 	// Journal of state modifications. This is the backbone of
 	// Snapshot and RevertToSnapshot.
-	journal        *journal
-	validRevisions []revision
-	nextRevisionId int
+	journalTracker
 
 	// Measurements gathered during execution for debugging purposes
 	AccountReads         time.Duration
@@ -140,9 +146,11 @@ func New(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, error) 
 		stateObjectsDirty:   make(map[common.Address]struct{}),
 		logs:                make(map[common.Hash][]*types.Log),
 		preimages:           make(map[common.Hash][]byte),
-		journal:             newJournal(),
-		accessList:          newAccessList(),
-		hasher:              crypto.NewKeccakState(),
+		journalTracker: journalTracker{
+			journal: newJournal(),
+		},
+		accessList: newAccessList(),
+		hasher:     crypto.NewKeccakState(),
 	}
 	if sdb.snaps != nil {
 		if sdb.snap = sdb.snaps.Snapshot(root); sdb.snap != nil {
@@ -656,8 +664,10 @@ func (s *StateDB) Copy() *StateDB {
 		logs:                make(map[common.Hash][]*types.Log, len(s.logs)),
 		logSize:             s.logSize,
 		preimages:           make(map[common.Hash][]byte, len(s.preimages)),
-		journal:             newJournal(),
-		hasher:              crypto.NewKeccakState(),
+		journalTracker: journalTracker{
+			journal: newJournal(),
+		},
+		hasher: crypto.NewKeccakState(),
 	}
 	// Copy the dirty states, logs, and preimages
 	for addr := range s.journal.dirties {
