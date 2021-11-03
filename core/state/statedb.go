@@ -94,22 +94,12 @@ type StateDB struct {
 	// by StateDB.Commit.
 	dbErr error
 
-	// The refund counter, also used by state transitioning.
-	refund uint64
-
-	thash   common.Hash
-	txIndex int
 	logs    map[common.Hash][]*types.Log
 	logSize uint
 
 	preimages map[common.Hash][]byte
 
-	// Per-transaction access list
-	accessList *accessList
-
-	// Journal of state modifications. This is the backbone of
-	// Snapshot and RevertToSnapshot.
-	journalTracker
+	*txStateContext
 
 	// Measurements gathered during execution for debugging purposes
 	AccountReads         time.Duration
@@ -146,11 +136,13 @@ func New(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, error) 
 		stateObjectsDirty:   make(map[common.Address]struct{}),
 		logs:                make(map[common.Hash][]*types.Log),
 		preimages:           make(map[common.Hash][]byte),
-		journalTracker: journalTracker{
-			journal: newJournal(),
+		txStateContext: &txStateContext{
+			journalTracker: journalTracker{
+				journal: newJournal(),
+			},
+			accessList: newAccessList(),
 		},
-		accessList: newAccessList(),
-		hasher:     crypto.NewKeccakState(),
+		hasher: crypto.NewKeccakState(),
 	}
 	if sdb.snaps != nil {
 		if sdb.snap = sdb.snaps.Snapshot(root); sdb.snap != nil {
@@ -660,12 +652,14 @@ func (s *StateDB) Copy() *StateDB {
 		stateObjects:        make(map[common.Address]*stateObject, len(s.journal.dirties)),
 		stateObjectsPending: make(map[common.Address]struct{}, len(s.stateObjectsPending)),
 		stateObjectsDirty:   make(map[common.Address]struct{}, len(s.journal.dirties)),
-		refund:              s.refund,
 		logs:                make(map[common.Hash][]*types.Log, len(s.logs)),
 		logSize:             s.logSize,
 		preimages:           make(map[common.Hash][]byte, len(s.preimages)),
-		journalTracker: journalTracker{
-			journal: newJournal(),
+		txStateContext: &txStateContext{
+			journalTracker: journalTracker{
+				journal: newJournal(),
+			},
+			refund: s.refund,
 		},
 		hasher: crypto.NewKeccakState(),
 	}
