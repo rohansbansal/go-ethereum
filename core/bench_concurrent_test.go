@@ -68,7 +68,7 @@ func genRandomAddrs(numKeys int) []*keystore.Key {
 // over which key is sending the transaction as well as which contract is being called. This will be done for [numTxs] per block across [numBlocks].
 // [requireAccessList] indicates whether the vmConfig will require a complete access list.
 // Also returns an int specifying the index of the first random block (as opposed to the setup blocks for deploying contracts and distributing funds).
-func generateRandomExecution(b *testing.B, numContracts int, numBlocks int, numTxs int, numKeys int, requireAccessList bool) ([]*types.Block, int) {
+func generateRandomExecution(b *testing.B, numContracts int, numBlocks int, numTxs int, numKeys int) ([]*types.Block, int) {
 	engine := ethash.NewFaker()
 	db := rawdb.NewMemoryDatabase()
 	genesis := gspec.MustCommit(db)
@@ -122,9 +122,7 @@ func generateRandomExecution(b *testing.B, numContracts int, numBlocks int, numT
 		diskdb := rawdb.NewMemoryDatabase()
 		gspec.MustCommit(diskdb)
 
-		chain, err := NewBlockChain(diskdb, nil, gspec.Config, engine, vm.Config{
-			RequireAccessList: requireAccessList,
-		}, nil, nil)
+		chain, err := NewBlockChain(diskdb, nil, gspec.Config, engine, vm.Config{}, nil, nil)
 		if err != nil {
 			b.Fatalf("failed to create tester chain: %v", err)
 		}
@@ -175,7 +173,7 @@ func generateRandomExecution(b *testing.B, numContracts int, numBlocks int, numT
 
 func benchmarkRandomBlockExecution(b *testing.B, numBlocks int, numTxs int, numContracts int, numKeys int, requireAccessList bool, memdb bool) {
 	// Generate the slice of blocks whose execution we wish to benchmark.
-	blocks, startIndex := generateRandomExecution(b, numContracts, numBlocks, numTxs, numKeys, requireAccessList)
+	blocks, startIndex := generateRandomExecution(b, numContracts, numBlocks, numTxs, numKeys)
 
 	for i := 0; i < b.N; i++ {
 		var diskdb ethdb.Database

@@ -115,6 +115,11 @@ type StateDBInterface interface {
 	AddPreimage(common.Hash, []byte)
 
 	ForEachStorage(common.Address, func(common.Hash, common.Hash) bool) error
+
+	Finalise(bool)
+	IntermediateRoot(bool) common.Hash
+	GetLogs(txHash common.Hash, blockHash common.Hash) []*types.Log
+	TxIndex() int
 }
 
 // StateDB structs within the ethereum protocol are used to store anything

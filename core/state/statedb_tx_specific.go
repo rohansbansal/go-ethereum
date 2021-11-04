@@ -12,6 +12,9 @@ import (
 // information that the statedb tracks, so that by swapping a single
 // pointer, the statedb wrapper can tell the statedb where to look
 // for all of the tx specific information.
+// TODO implement more fine grained locking
+// add functions to [txStateContext] to support more fine grained locking
+// when accessing the fields
 type txStateContext struct {
 	journalTracker
 	accessList *accessList
@@ -275,4 +278,33 @@ func (txDB *txSpecificStateDB) ForEachStorage(addr common.Address, f func(common
 
 	txDB.StateDB.txStateContext = txDB.txContext
 	return txDB.StateDB.ForEachStorage(addr, f)
+}
+
+func (txDB *txSpecificStateDB) Finalise(deleteEmptyObjects bool) {
+	txDB.lock.Lock()
+	defer txDB.lock.Unlock()
+
+	txDB.StateDB.txStateContext = txDB.txContext
+	txDB.StateDB.Finalise(deleteEmptyObjects)
+}
+func (txDB *txSpecificStateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
+	txDB.lock.Lock()
+	defer txDB.lock.Unlock()
+
+	txDB.StateDB.txStateContext = txDB.txContext
+	return txDB.StateDB.IntermediateRoot(deleteEmptyObjects)
+}
+func (txDB *txSpecificStateDB) GetLogs(txHash common.Hash, blockHash common.Hash) []*types.Log {
+	txDB.lock.Lock()
+	defer txDB.lock.Unlock()
+
+	txDB.StateDB.txStateContext = txDB.txContext
+	return txDB.StateDB.GetLogs(txHash, blockHash)
+}
+
+func (txDB *txSpecificStateDB) TxIndex() int {
+	txDB.lock.Lock()
+	defer txDB.lock.Unlock()
+
+	return txDB.txContext.txIndex
 }

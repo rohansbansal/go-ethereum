@@ -19,36 +19,54 @@ package core
 import (
 	"fmt"
 	"math"
+	"sync"
 )
 
 // GasPool tracks the amount of gas available during execution of the transactions
 // in a block. The zero value is a pool with zero gas available.
-type GasPool uint64
+// TODO create more robust solution to handling the gas pool across multiple concurrent
+// transaction executions
+type GasPool struct {
+	lock sync.RWMutex
+	gas  uint64
+}
 
 // AddGas makes gas available for execution.
 func (gp *GasPool) AddGas(amount uint64) *GasPool {
-	if uint64(*gp) > math.MaxUint64-amount {
+	gp.lock.Lock()
+	defer gp.lock.Unlock()
+
+	if gp.gas > math.MaxUint64-amount {
 		panic("gas pool pushed above uint64")
 	}
-	*(*uint64)(gp) += amount
+	gp.gas += amount
 	return gp
 }
 
 // SubGas deducts the given amount from the pool if enough gas is
 // available and returns an error otherwise.
 func (gp *GasPool) SubGas(amount uint64) error {
-	if uint64(*gp) < amount {
+	gp.lock.Lock()
+	defer gp.lock.Unlock()
+
+	if gp.gas < amount {
 		return ErrGasLimitReached
 	}
-	*(*uint64)(gp) -= amount
+	gp.gas -= amount
 	return nil
 }
 
 // Gas returns the amount of gas remaining in the pool.
 func (gp *GasPool) Gas() uint64 {
-	return uint64(*gp)
+	gp.lock.RLock()
+	defer gp.lock.RUnlock()
+
+	return gp.gas
 }
 
 func (gp *GasPool) String() string {
-	return fmt.Sprintf("%d", *gp)
+	gp.lock.RLock()
+	defer gp.lock.RUnlock()
+
+	return fmt.Sprintf("%d", gp.gas)
 }

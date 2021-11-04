@@ -19,16 +19,20 @@ package core
 import (
 	"fmt"
 	"math/big"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
+	"github.com/ethereum/go-ethereum/core/parallel"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+	"golang.org/x/sync/errgroup"
 )
 
 // StateProcessor is a basic Processor, which takes care of transitioning
@@ -58,6 +62,16 @@ func NewStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consen
 // returns the amount of gas that was used in the process. If any of the
 // transactions failed to execute due to insufficient gas it will return an error.
 func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config) (types.Receipts, []*types.Log, uint64, error) {
+	if cfg.RequireAccessList {
+		return p.processParallel(block, statedb, cfg)
+	} else {
+		return p.processSync(block, statedb, cfg)
+	}
+}
+
+// processSync is the existing implementation from Ethereum for processing transactions serially. It has not and should
+// not be changed from the original geth implementation.
+func (p *StateProcessor) processSync(block *types.Block, statedb *state.StateDB, cfg vm.Config) (types.Receipts, []*types.Log, uint64, error) {
 	var (
 		receipts    types.Receipts
 		usedGas     = new(uint64)
@@ -72,9 +86,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		misc.ApplyDAOHardFork(statedb)
 	}
 	blockContext := NewEVMBlockContext(header, p.bc, nil)
+	vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, p.config, cfg)
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
-		vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, p.config, cfg)
 		msg, err := tx.AsMessage(types.MakeSigner(p.config, header.Number), header.BaseFee)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
@@ -93,7 +107,106 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	return receipts, allLogs, *usedGas, nil
 }
 
-func applyTransaction(msg types.Message, config *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, tx *types.Transaction, usedGas *uint64, evm *vm.EVM) (*types.Receipt, error) {
+// processParallel attempts to process the transactiosn in [block] in parallel by wrapping everything with concurrent safe data
+// structures and forcing transactions to grab locks to access the state that they wish to use.
+func (p *StateProcessor) processParallel(block *types.Block, statedb *state.StateDB, cfg vm.Config) (types.Receipts, []*types.Log, uint64, error) {
+	var (
+		receipts    types.Receipts = make([]*types.Receipt, len(block.Transactions()))
+		usedGas                    = new(uint64)
+		header                     = block.Header()
+		blockHash                  = block.Hash()
+		blockNumber                = block.Number()
+		txLogs                     = make([][]*types.Log, len(block.Transactions()))
+		allLogs     []*types.Log
+		gp          = new(GasPool).AddGas(block.GasLimit())
+		sharedLock  = &sync.Mutex{}
+	)
+	// Mutate the block and state according to any hard-fork specs
+	if p.config.DAOForkSupport && p.config.DAOForkBlock != nil && p.config.DAOForkBlock.Cmp(block.Number()) == 0 {
+		misc.ApplyDAOHardFork(statedb)
+	}
+	blockContext := NewEVMBlockContext(header, p.bc, nil)
+
+	addrLocks := make(map[common.Address]*parallel.FIFOLocker)
+	for _, tx := range block.Transactions() {
+		for _, accessTuple := range tx.AccessList() {
+			locker, exists := addrLocks[accessTuple.Address]
+			if !exists {
+				addrLocks[accessTuple.Address] = parallel.NewFIFOLocker(tx.Hash())
+			} else {
+				locker.Reserve(tx.Hash())
+			}
+		}
+	}
+
+	var eg errgroup.Group
+	// Iterate over and process the individual transactions
+	for i, tx := range block.Transactions() {
+		// Create closure with i and tx, so that the loop does not overwrite the memory used in
+		// the goroutine.
+		i := i
+		tx := tx
+		eg.Go(func() error {
+			log.Info("starting goroutine for tx (%s, %d)")
+			// Grab the locks for every item in the access list. This will block until the transaction
+			// can acquire all the necessary locks.
+			for _, accessTuple := range tx.AccessList() {
+				// Note: in this phase we only read from the map, so it is safe to
+				// access [addrLocks] concurrently without using a separate lock.
+				locker := addrLocks[accessTuple.Address]
+				locker.Lock(tx.Hash())
+			}
+			log.Info("successfully grabbed locks for tx (%s, %d)")
+
+			txDB := state.NewTxSpecificStateDB(statedb, sharedLock, tx.Hash(), i)
+			vmenv := vm.NewEVM(blockContext, vm.TxContext{}, txDB, p.config, cfg)
+			msg, err := tx.AsMessage(types.MakeSigner(p.config, header.Number), header.BaseFee)
+			if err != nil {
+				return fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+			}
+			receipt, err := applyTransaction(msg, p.config, p.bc, nil, gp, txDB, blockNumber, blockHash, tx, usedGas, vmenv)
+			if err != nil {
+				return fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+			}
+			// Set the receipt and logs at the correct index
+			receipts[i] = receipt
+			txLogs[i] = receipt.Logs
+			return nil
+		})
+	}
+
+	if err := eg.Wait(); err != nil {
+		return nil, nil, 0, err
+	}
+	// Coalesce the logs
+	for _, logs := range txLogs {
+		allLogs = append(allLogs, logs...)
+	}
+	// Update the tx receipt cumulative gas used values and then make sure that the total gas used
+	// is below the block gas limit.
+	// Assuming the remaining gas in the gas pool does not impact the EVM execution unless it hits the block
+	// gas limit, this should work fine.
+	// For any block that doesn't hit the gas limit this should be fine, but if a block does hit the gas limit
+	// it may be non-deterministic which transaction reverts in this case. In that case, one option would be to
+	// fallback to executing transactions serially.
+	// XXX this is currently a non-deterministic bug in the parallel execution path.
+	var cumulativeGasUsed uint64
+	for _, receipt := range receipts {
+		cumulativeGasUsed += receipt.GasUsed
+		receipt.CumulativeGasUsed = cumulativeGasUsed
+	}
+
+	if cumulativeGasUsed > header.GasLimit {
+		return nil, nil, 0, fmt.Errorf("block exceeded gas limit (%d) with (%d)", header.GasLimit, cumulativeGasUsed)
+	}
+
+	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
+	p.engine.Finalize(p.bc, header, statedb, block.Transactions(), block.Uncles())
+
+	return receipts, allLogs, *usedGas, nil
+}
+
+func applyTransaction(msg types.Message, config *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb state.StateDBInterface, blockNumber *big.Int, blockHash common.Hash, tx *types.Transaction, usedGas *uint64, evm *vm.EVM) (*types.Receipt, error) {
 	// Create a new context to be used in the EVM environment.
 	txContext := NewEVMTxContext(msg)
 	evm.Reset(txContext, statedb)
@@ -116,7 +229,7 @@ func applyTransaction(msg types.Message, config *params.ChainConfig, bc ChainCon
 
 	// Create a new receipt for the transaction, storing the intermediate root and gas used
 	// by the tx.
-	receipt := &types.Receipt{Type: tx.Type()}
+	receipt := &types.Receipt{Type: tx.Type(), CumulativeGasUsed: atomic.LoadUint64(usedGas)}
 	if result.Failed() {
 		receipt.Status = types.ReceiptStatusFailed
 	} else {

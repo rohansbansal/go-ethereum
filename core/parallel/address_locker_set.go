@@ -1,7 +1,7 @@
 package parallel
 
 import (
-	"sync"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -11,12 +11,13 @@ type TxExecutor struct {
 	txs []*types.Transaction
 
 	addressLocks map[common.Address]*FIFOLocker
+	execute      func(tx *types.Transaction) error
 }
 
 // TODO:
 // need to make the statedb and evm safe to use in parallel
 
-func NewTxExecutor(txs []*types.Transaction) *TxExecutor {
+func NewTxExecutor(txs []*types.Transaction, execute func(tx *types.Transaction) error) *TxExecutor {
 	executor := &TxExecutor{
 		txs:          txs,
 		addressLocks: make(map[common.Address]*FIFOLocker),
@@ -37,23 +38,21 @@ func NewTxExecutor(txs []*types.Transaction) *TxExecutor {
 	return executor
 }
 
-func (e *TxExecutor) Execute() {
-	var wg sync.WaitGroup
+func (e *TxExecutor) Execute() error {
+	var wg errgroup.Group
 	for _, tx := range e.txs {
 		// Create local variable so [tx] is not overwritten on the next iteration of the loop
 		tx := tx
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() error {
 			// Grab the locks for every item in the access list. This will block until the transaction
 			// can acquire all the necessary locks.
 			for _, accessTuple := range tx.AccessList() {
 				locker := e.addressLocks[accessTuple.Address]
 				locker.Lock(tx.Hash())
 			}
-			// Execute the transaction
-		}()
+			return e.execute(tx)
+		})
 	}
 
-	wg.Wait()
+	return wg.Wait()
 }
