@@ -8,9 +8,8 @@ import (
 )
 
 type FIFOLocker struct {
-	lock sync.Mutex
-
-	headTx  common.Hash
+	headTx common.Hash
+	// headLock *sync.Mutex
 	txQueue []common.Hash
 
 	txLocks map[common.Hash]*sync.Mutex
@@ -21,16 +20,17 @@ type FIFOLocker struct {
 // anyone else can access the resource.
 func NewFIFOLocker(head common.Hash) *FIFOLocker {
 	return &FIFOLocker{
-		headTx:  head,
+		headTx: head,
+		// headLock: &sync.Mutex{},
 		txQueue: make([]common.Hash, 0),
 		txLocks: make(map[common.Hash]*sync.Mutex),
 	}
 }
 
 func (f *FIFOLocker) Reserve(txHash common.Hash) {
-	f.lock.Lock()
-	defer f.lock.Unlock()
-
+	if txHash == f.headTx {
+		panic("cannot reserve head tx")
+	}
 	f.txQueue = append(f.txQueue, txHash)
 	// Create a lock and grab it immediately. This must be unlocked by the
 	// previous item in the queue, before the lock can be grabbed.
@@ -40,28 +40,21 @@ func (f *FIFOLocker) Reserve(txHash common.Hash) {
 }
 
 func (f *FIFOLocker) Lock(txHash common.Hash) {
-	f.lock.Lock()
-
 	// Allow [headTx] to execute immediately without
 	// grabbing any new locks
 	if f.headTx == txHash {
-		f.lock.Unlock()
+		// f.headLock.Lock()
 		return
 	}
 
 	lock, exists := f.txLocks[txHash]
 	if !exists {
-		f.lock.Unlock()
 		panic(fmt.Sprintf("unexpected attempt to grab lock from txHash: %s", txHash))
 	}
-	f.lock.Unlock()
 	lock.Lock()
 }
 
 func (f *FIFOLocker) Unlock(txHash common.Hash) {
-	f.lock.Lock()
-	defer f.lock.Unlock()
-
 	if f.headTx != txHash {
 		panic(fmt.Sprintf("unlock attempt from incorrect tx hash: %s", txHash))
 	}
@@ -71,7 +64,7 @@ func (f *FIFOLocker) Unlock(txHash common.Hash) {
 		return
 	}
 	// Extract the next transaction and update the txQueue
-	f.headTx, f.txQueue = f.txQueue[0], f.txQueue[0:]
+	f.headTx, f.txQueue = f.txQueue[0], f.txQueue[1:]
 	// Unlock the lock corresponding to the updated [f.headTx], so that the goroutine
 	// that is blocking attempting to grab the lock will be released.
 	lock, exists := f.txLocks[f.headTx]

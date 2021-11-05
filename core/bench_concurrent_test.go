@@ -38,7 +38,7 @@ import (
 )
 
 var (
-	signer          = types.HomesteadSigner{}
+	signer          = types.LatestSignerForChainID(params.TestPreLondonConfig.ChainID)
 	testBankKey, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
 	testBankAddress = crypto.PubkeyToAddress(testBankKey.PublicKey)
 	bankFunds       = new(big.Int).Mul(big.NewInt(999999999999999999), big.NewInt(1000000000))
@@ -105,7 +105,17 @@ func generateRandomExecution(b *testing.B, numContracts int, numBlocks int, numT
 	// Generate a single block that will be responsible for deploying the contracts at the start of the execution
 	generateContractsBlock, _ := GenerateChain(gspec.Config, genesis, engine, db, 1, func(i int, block *BlockGen) {
 		for i := 0; i < numContracts; i++ {
-			tx, err := types.SignTx(types.NewContractCreation(uint64(i), common.Big0, 1_000_000, common.Big1, code), signer, testBankKey)
+			tx, err := types.SignTx(types.NewTx(&types.AccessListTx{
+				Nonce: uint64(i),
+				Value: common.Big0,
+				Gas:   1_000_000,
+				Data:  code,
+				AccessList: []types.AccessTuple{
+					{
+						Address: testBankAddress,
+					},
+				},
+			}), signer, testBankKey)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -142,7 +152,20 @@ func generateRandomExecution(b *testing.B, numContracts int, numBlocks int, numT
 		block.SetCoinbase(common.Address{1})
 
 		for _, key := range keys {
-			tx, err := types.SignTx(types.NewTransaction(block.TxNonce(testBankAddress), key.Address, new(big.Int).Mul(big.NewInt(10), big.NewInt(int64(params.Ether))), params.TxGas, nil, nil), signer, testBankKey)
+			tx, err := types.SignTx(types.NewTx(&types.AccessListTx{
+				Nonce: block.TxNonce(testBankAddress),
+				To:    &key.Address,
+				Value: new(big.Int).Mul(big.NewInt(10), big.NewInt(int64(params.Ether))),
+				Gas:   params.TxGas * 2,
+				AccessList: []types.AccessTuple{
+					{
+						Address: testBankAddress,
+					},
+					{
+						Address: key.Address,
+					},
+				},
+			}), signer, testBankKey)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -159,7 +182,22 @@ func generateRandomExecution(b *testing.B, numContracts int, numBlocks int, numT
 		for txi := 0; txi < numTxs; txi++ {
 			key := keys[rand.Intn(len(keys))]
 			modifiedCallData := append(callDataMissingAddress, key.Address.Bytes()...)
-			tx, err := types.SignTx(types.NewTransaction(block.TxNonce(key.Address), contractAddrs[rand.Intn(len(contractAddrs))], big.NewInt(0), 50_000, big.NewInt(1), modifiedCallData), signer, key.PrivateKey)
+			contractAddr := contractAddrs[rand.Intn(len(contractAddrs))]
+			tx, err := types.SignTx(types.NewTx(&types.AccessListTx{
+				Nonce: block.TxNonce(key.Address),
+				To:    &contractAddr,
+				Value: big.NewInt(0),
+				Gas:   50_000,
+				Data:  modifiedCallData,
+				AccessList: []types.AccessTuple{
+					{
+						Address: contractAddr,
+					},
+					{
+						Address: key.Address,
+					},
+				},
+			}), signer, key.PrivateKey)
 			if err != nil {
 				b.Error(err)
 			}
@@ -228,9 +266,19 @@ func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, numTxs int, r
 	code := common.Hex2Bytes(contract.Code[2:])
 	generateContractChain, _ := GenerateChain(gspec.Config, genesis, engine, db, 1, func(i int, block *BlockGen) {
 		for i := 0; i < numContracts; i++ {
-			tx, err := types.SignTx(types.NewContractCreation(uint64(i), common.Big0, 1_000_000, common.Big1, code), signer, testBankKey)
+			tx, err := types.SignTx(types.NewTx(&types.AccessListTx{
+				Nonce: uint64(i),
+				Value: common.Big0,
+				Gas:   1_000_000,
+				Data:  code,
+				AccessList: []types.AccessTuple{
+					{
+						Address: testBankAddress,
+					},
+				},
+			}), signer, testBankKey)
 			if err != nil {
-				b.Fatal(err)
+				b.Fatalf("failed: %s. config: %s", err, gspec.Config)
 			}
 			block.AddTx(tx)
 		}
@@ -265,7 +313,23 @@ func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, numTxs int, r
 			uniq := uint64(i*numTxs + txi + numContracts)
 			addr := common.Address{byte(txi)}
 			modifiedCallData := append(callDataMissingAddress, addr.Bytes()...)
-			tx, err := types.SignTx(types.NewTransaction(uniq, contractAddrs[rand.Intn(10)], big.NewInt(1), 50_000, big.NewInt(1), modifiedCallData), signer, testBankKey)
+
+			contractAddr := contractAddrs[rand.Intn(10)]
+			tx, err := types.SignTx(types.NewTx(&types.AccessListTx{
+				Nonce: uniq,
+				To:    &contractAddr,
+				Value: big.NewInt(1),
+				Gas:   50_000,
+				Data:  modifiedCallData,
+				AccessList: []types.AccessTuple{
+					{
+						Address: contractAddr,
+					},
+					{
+						Address: testBankAddress,
+					},
+				},
+			}), signer, testBankKey)
 			if err != nil {
 				b.Error(err)
 			}
@@ -276,6 +340,7 @@ func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, numTxs int, r
 	blocks := append(generateContractChain, shared...)
 	b.StopTimer()
 	b.ResetTimer()
+	// log.Root().SetHandler(log.LvlFilterHandler(log.LvlDebug, log.StreamHandler(os.Stderr, log.TerminalFormat(false))))
 	for i := 0; i < b.N; i++ {
 		// Import the shared chain and the original canonical one
 		diskdb := rawdb.NewMemoryDatabase()
@@ -296,9 +361,17 @@ func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, numTxs int, r
 }
 
 func BenchmarkSimpleBlockTransactionExecution(b *testing.B) {
-	benchmarkArbitraryBlockExecution(b, 10, 10, false)
+	benchmarkArbitraryBlockExecution(b, 1000, 10, false)
 }
 
-func BenchmarkRandomParallelExecution(b *testing.B) {
-	benchmarkRandomBlockExecution(b, 10, 10, 10, 10, true, true)
+func BenchmarkSimpleBlockTransactionParallelExecution(b *testing.B) {
+	benchmarkArbitraryBlockExecution(b, 1000, 10, true)
+}
+
+func BenchmarkRandomBlockTransactionExecution(b *testing.B) {
+	benchmarkRandomBlockExecution(b, 1000, 100, 100, 100, false, true)
+}
+
+func BenchmarkRandomBlockTransactionParallelExecution(b *testing.B) {
+	benchmarkRandomBlockExecution(b, 1000, 100, 100, 100, true, true)
 }

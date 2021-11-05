@@ -1,58 +1,41 @@
 package parallel
 
 import (
-	"golang.org/x/sync/errgroup"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-type TxExecutor struct {
-	txs []*types.Transaction
-
+type AccessListLocker struct {
 	addressLocks map[common.Address]*FIFOLocker
-	execute      func(tx *types.Transaction) error
 }
 
-// TODO:
-// need to make the statedb and evm safe to use in parallel
-
-func NewTxExecutor(txs []*types.Transaction, execute func(tx *types.Transaction) error) *TxExecutor {
-	executor := &TxExecutor{
-		txs:          txs,
+func NewAccessListLocker(txs []*types.Transaction) *AccessListLocker {
+	al := &AccessListLocker{
 		addressLocks: make(map[common.Address]*FIFOLocker),
 	}
 
-	// Construct the executor
 	for _, tx := range txs {
 		for _, accessTuple := range tx.AccessList() {
-			locker, exists := executor.addressLocks[accessTuple.Address]
-			if !exists {
-				executor.addressLocks[accessTuple.Address] = NewFIFOLocker(tx.Hash())
+			if lock, exists := al.addressLocks[accessTuple.Address]; exists {
+				lock.Reserve(tx.Hash())
 			} else {
-				locker.Reserve(tx.Hash())
+				al.addressLocks[accessTuple.Address] = NewFIFOLocker(tx.Hash())
 			}
 		}
 	}
-
-	return executor
+	return al
 }
 
-func (e *TxExecutor) Execute() error {
-	var wg errgroup.Group
-	for _, tx := range e.txs {
-		// Create local variable so [tx] is not overwritten on the next iteration of the loop
-		tx := tx
-		wg.Go(func() error {
-			// Grab the locks for every item in the access list. This will block until the transaction
-			// can acquire all the necessary locks.
-			for _, accessTuple := range tx.AccessList() {
-				locker := e.addressLocks[accessTuple.Address]
-				locker.Lock(tx.Hash())
-			}
-			return e.execute(tx)
-		})
+func (a *AccessListLocker) Lock(tx *types.Transaction) {
+	for _, accessTuple := range tx.AccessList() {
+		lock := a.addressLocks[accessTuple.Address]
+		lock.Lock(tx.Hash())
 	}
+}
 
-	return wg.Wait()
+func (a *AccessListLocker) Unlock(tx *types.Transaction) {
+	for _, accessTuple := range tx.AccessList() {
+		lock := a.addressLocks[accessTuple.Address]
+		lock.Unlock(tx.Hash())
+	}
 }

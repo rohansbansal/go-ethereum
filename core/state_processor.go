@@ -127,17 +127,7 @@ func (p *StateProcessor) processParallel(block *types.Block, statedb *state.Stat
 	}
 	blockContext := NewEVMBlockContext(header, p.bc, nil)
 
-	addrLocks := make(map[common.Address]*parallel.FIFOLocker)
-	for _, tx := range block.Transactions() {
-		for _, accessTuple := range tx.AccessList() {
-			locker, exists := addrLocks[accessTuple.Address]
-			if !exists {
-				addrLocks[accessTuple.Address] = parallel.NewFIFOLocker(tx.Hash())
-			} else {
-				locker.Reserve(tx.Hash())
-			}
-		}
-	}
+	txLocker := parallel.NewAccessListLocker(block.Transactions())
 
 	var eg errgroup.Group
 	// Iterate over and process the individual transactions
@@ -147,16 +137,11 @@ func (p *StateProcessor) processParallel(block *types.Block, statedb *state.Stat
 		i := i
 		tx := tx
 		eg.Go(func() error {
-			log.Info("starting goroutine for tx (%s, %d)")
+			log.Info(fmt.Sprintf("starting goroutine for tx (%s, %d)", tx.Hash(), i))
 			// Grab the locks for every item in the access list. This will block until the transaction
 			// can acquire all the necessary locks.
-			for _, accessTuple := range tx.AccessList() {
-				// Note: in this phase we only read from the map, so it is safe to
-				// access [addrLocks] concurrently without using a separate lock.
-				locker := addrLocks[accessTuple.Address]
-				locker.Lock(tx.Hash())
-			}
-			log.Info("successfully grabbed locks for tx (%s, %d)")
+			txLocker.Lock(tx)
+			log.Info(fmt.Sprintf("successfully grabbed locks for tx (%s, %d)", tx.Hash(), i))
 
 			txDB := state.NewTxSpecificStateDB(statedb, sharedLock, tx.Hash(), i)
 			vmenv := vm.NewEVM(blockContext, vm.TxContext{}, txDB, p.config, cfg)
@@ -168,6 +153,9 @@ func (p *StateProcessor) processParallel(block *types.Block, statedb *state.Stat
 			if err != nil {
 				return fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 			}
+			log.Info(fmt.Sprintf("releasing locks for tx (%s, %d)", tx.Hash(), i))
+			txLocker.Unlock(tx)
+			log.Info(fmt.Sprintf("released locks for tx (%s, %d)", tx.Hash(), i))
 			// Set the receipt and logs at the correct index
 			receipts[i] = receipt
 			txLogs[i] = receipt.Logs
