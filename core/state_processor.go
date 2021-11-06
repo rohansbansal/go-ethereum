@@ -19,6 +19,7 @@ package core
 import (
 	"fmt"
 	"math/big"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -32,7 +33,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
-	"golang.org/x/sync/errgroup"
 )
 
 // StateProcessor is a basic Processor, which takes care of transitioning
@@ -129,7 +129,7 @@ func (p *StateProcessor) processParallel(block *types.Block, statedb *state.Stat
 
 	txLocker := parallel.NewAccessListLocker(block.Transactions())
 
-	var eg errgroup.Group
+	eg := parallel.NewBoundedErrGroup(runtime.NumCPU()*2, len(block.Transactions()))
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		// Create closure with i and tx, so that the loop does not overwrite the memory used in

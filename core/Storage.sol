@@ -15,6 +15,9 @@ contract Storage {
      * @param num value to store
      */
     function store(uint256 num) public {
+        for (int i = 0; i < 1000; i++ ) {
+            keccak256(bytes("stringlitereal"));
+        }
         number = num;
     }
 
@@ -23,6 +26,9 @@ contract Storage {
      * @return value of 'number'
      */
     function retrieve() public view returns (uint256){
+        for (int i = 0; i < 1000; i++ ) {
+            keccak256(bytes("stringlitereal"));
+        }
         return number;
     }
 }

@@ -361,17 +361,17 @@ func benchmarkArbitraryBlockExecution(b *testing.B, numBlocks int, numTxs int, r
 }
 
 func BenchmarkSimpleBlockTransactionExecution(b *testing.B) {
-	benchmarkArbitraryBlockExecution(b, 1000, 10, false)
+	benchmarkArbitraryBlockExecution(b, 50, 10, false)
 }
 
 func BenchmarkSimpleBlockTransactionParallelExecution(b *testing.B) {
-	benchmarkArbitraryBlockExecution(b, 1000, 10, true)
+	benchmarkArbitraryBlockExecution(b, 50, 10, true)
 }
 
 func BenchmarkRandomBlockTransactionExecution(b *testing.B) {
-	benchmarkRandomBlockExecution(b, 1000, 100, 100, 100, false, true)
+	benchmarkRandomBlockExecution(b, 50, 50, 100, 100, false, true)
 }
 
 func BenchmarkRandomBlockTransactionParallelExecution(b *testing.B) {
-	benchmarkRandomBlockExecution(b, 1000, 100, 100, 100, true, true)
+	benchmarkRandomBlockExecution(b, 50, 50, 100, 100, true, true)
 }
