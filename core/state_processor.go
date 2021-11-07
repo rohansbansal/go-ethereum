@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/core/wrappers"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
@@ -130,13 +131,17 @@ func (p *StateProcessor) processParallel(block *types.Block, statedb *state.Stat
 	txLocker := parallel.NewAccessListLocker(block.Transactions())
 
 	eg := parallel.NewBoundedErrGroup(runtime.NumCPU()*2, len(block.Transactions()))
+	var wg sync.WaitGroup
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		// Create closure with i and tx, so that the loop does not overwrite the memory used in
 		// the goroutine.
+		var errs wrappers.Errs
 		i := i
 		tx := tx
-		eg.Go(func() error {
+		wg.Add(1)
+		eg.Go(func() {
+			defer wg.Done()
 			log.Info(fmt.Sprintf("starting goroutine for tx (%s, %d)", tx.Hash(), i))
 			// Grab the locks for every item in the access list. This will block until the transaction
 			// can acquire all the necessary locks.
@@ -147,11 +152,11 @@ func (p *StateProcessor) processParallel(block *types.Block, statedb *state.Stat
 			vmenv := vm.NewEVM(blockContext, vm.TxContext{}, txDB, p.config, cfg)
 			msg, err := tx.AsMessage(types.MakeSigner(p.config, header.Number), header.BaseFee)
 			if err != nil {
-				return fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+				errs.Add(fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err))
 			}
 			receipt, err := applyTransaction(msg, p.config, p.bc, nil, gp, txDB, blockNumber, blockHash, tx, usedGas, vmenv)
 			if err != nil {
-				return fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+				errs.Add(fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err))
 			}
 			log.Info(fmt.Sprintf("releasing locks for tx (%s, %d)", tx.Hash(), i))
 			txLocker.Unlock(tx)
@@ -159,13 +164,9 @@ func (p *StateProcessor) processParallel(block *types.Block, statedb *state.Stat
 			// Set the receipt and logs at the correct index
 			receipts[i] = receipt
 			txLogs[i] = receipt.Logs
-			return nil
 		})
 	}
-
-	if err := eg.Wait(); err != nil {
-		return nil, nil, 0, err
-	}
+	wg.Wait()
 	// Coalesce the logs
 	for _, logs := range txLogs {
 		allLogs = append(allLogs, logs...)

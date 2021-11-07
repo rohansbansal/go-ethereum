@@ -7,7 +7,6 @@
 package parallel
 
 import (
-	"context"
 	"sync"
 )
 
@@ -16,47 +15,29 @@ import (
 //
 // A zero Group is valid and does not cancel on error.
 type BoundedGroup struct {
-	cancel func()
-
-	workerWG, taskWG sync.WaitGroup
-	workers          chan struct{}
-	tasks            chan func() error // A fixed size channel of
-	closer           chan struct{}
-
-	errOnce sync.Once
-	err     error
-}
-
-func NewBoundedErrGroupWithContext(parentCtx context.Context, numWorkers int, maxPendingTasks int) (*BoundedGroup, context.Context) {
-	bg := NewBoundedErrGroup(numWorkers, maxPendingTasks)
-	ctx, cancel := context.WithCancel(parentCtx)
-	bg.cancel = cancel
-	return bg, ctx
+	workerWG sync.WaitGroup
+	workers  chan struct{}
+	tasks    chan func() // A fixed size channel of
+	closer   chan struct{}
 }
 
 func NewBoundedErrGroup(numWorkers int, maxPendingTasks int) *BoundedGroup {
-	return &BoundedGroup{
+	res := &BoundedGroup{
 		workers: make(chan struct{}, numWorkers),
-		tasks:   make(chan func() error, maxPendingTasks),
+		tasks:   make(chan func(), maxPendingTasks),
 		closer:  make(chan struct{}),
 	}
+	//start the numWorker worker threads
+	for i := 0; i < numWorkers; i++ {
+		res.workerWG.Add(1)
+		go res.startWorker()
+	}
+	return res
 }
 
-func (g *BoundedGroup) Go(f func() error) {
-	// Start an additional worker, if we have not yet reached the worker thread cap.
-	select {
-	case g.workers <- struct{}{}:
-		g.workerWG.Add(1)
-		go g.startWorker()
-	default:
-	}
-
+func (g *BoundedGroup) Go(f func()) {
 	// Add [f] to the task queue
-	g.taskWG.Add(1)
-	g.tasks <- func() error {
-		defer g.taskWG.Done()
-		return f()
-	}
+	g.tasks <- f
 }
 
 func (g *BoundedGroup) startWorker() {
@@ -68,31 +49,13 @@ func (g *BoundedGroup) startWorker() {
 		case <-g.closer:
 			return
 		case f := <-g.tasks:
-			if err := f(); err != nil {
-				g.errOnce.Do(func() {
-					g.err = err
-					if g.cancel != nil {
-						g.cancel()
-					}
-				})
-			}
+			f()
 		}
 	}
 }
 
-func (g *BoundedGroup) Wait() error {
-	// Wait for all tasks to finish
-	g.taskWG.Wait()
-
+func (g *BoundedGroup) Wait() {
 	// Shut down the worker threads
 	close(g.closer)
 	g.workerWG.Wait()
-
-	// Call [cancel] if supplied.
-	if g.cancel != nil {
-		g.cancel()
-	}
-
-	// Return the appropriate error
-	return g.err
 }

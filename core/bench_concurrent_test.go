@@ -18,7 +18,9 @@ package core
 
 import (
 	cryptorand "crypto/rand"
+	"errors"
 	"fmt"
+	"io/ioutil"
 	"math/big"
 	"math/rand"
 	"os"
@@ -209,9 +211,8 @@ func generateRandomExecution(b *testing.B, numContracts int, numBlocks int, numT
 	return blocks, index
 }
 
-func benchmarkRandomBlockExecution(b *testing.B, numBlocks int, numTxs int, numContracts int, numKeys int, requireAccessList bool, memdb bool) {
+func benchmarkRandomBlockExecution(b *testing.B, blocks []*types.Block, startIndex int, numBlocks int, numTxs int, numContracts int, numKeys int, requireAccessList bool, memdb bool) {
 	// Generate the slice of blocks whose execution we wish to benchmark.
-	blocks, startIndex := generateRandomExecution(b, numContracts, numBlocks, numTxs, numKeys)
 
 	for i := 0; i < b.N; i++ {
 		var diskdb ethdb.Database
@@ -369,9 +370,52 @@ func BenchmarkSimpleBlockTransactionParallelExecution(b *testing.B) {
 }
 
 func BenchmarkRandomBlockTransactionExecution(b *testing.B) {
-	benchmarkRandomBlockExecution(b, 50, 50, 100, 100, false, true)
+	blocks, startIndex := generateRandomExecution(b, 100, 50, 50, 100)
+	benchmarkRandomBlockExecution(b, blocks, startIndex, 50, 50, 100, 100, false, true)
 }
 
 func BenchmarkRandomBlockTransactionParallelExecution(b *testing.B) {
-	benchmarkRandomBlockExecution(b, 50, 50, 100, 100, true, true)
+	blocks, startIndex := generateRandomExecution(b, 100, 50, 50, 100)
+	benchmarkRandomBlockExecution(b, blocks, startIndex, 50, 50, 100, 100, true, true)
+}
+
+func GenerateFile(b *testing.B, filepath string, numBlocks int, numTxs int, numContracts int, numKeys int) {
+	blocks, _ := generateRandomExecution(b, numContracts, numBlocks, numTxs, numKeys)
+	file, err := os.Create(filepath)
+	if err != nil {
+		b.Error("error in creating file")
+	}
+	types.WriteBlocks(file, blocks)
+}
+
+func ReadFile(b *testing.B, numBlocks int, numTxs int, numContracts int, numKeys int) []*types.Block {
+	gopath := os.Getenv("GOPATH")
+	filepath := gopath + "/src/github.com/ethereum/go-ethereum/core/testing_file.bin"
+	if _, err := os.Stat(filepath); errors.Is(err, os.ErrNotExist) {
+		GenerateFile(b, filepath, numBlocks, numTxs, numContracts, numKeys)
+	}
+	buf, err := ioutil.ReadFile(filepath)
+	if err != nil {
+		b.Error("error in reading file")
+	}
+	blocks, err := types.ReadBlocks(buf)
+	if err != nil {
+		b.Error("error in generating blocks")
+	}
+
+	return blocks
+}
+
+func BenchmarkParallelExecutionFromFile(b *testing.B) {
+	blocks := ReadFile(b, 1000, 100, 100, 100)
+	for i := 0; i < 5; i++ {
+		benchmarkRandomBlockExecution(b, blocks, len(blocks), 1000, 100, 100, 100, true, true)
+	}
+}
+
+func BenchmarkSimpleExecutionFromFile(b *testing.B) {
+	blocks := ReadFile(b, 1000, 100, 100, 100)
+	for i := 0; i < 5; i++ {
+		benchmarkRandomBlockExecution(b, blocks, len(blocks), 1000, 100, 100, 100, true, true)
+	}
 }
