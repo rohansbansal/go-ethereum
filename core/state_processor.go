@@ -41,17 +41,24 @@ import (
 //
 // StateProcessor implements Processor.
 type StateProcessor struct {
-	config *params.ChainConfig // Chain configuration options
-	bc     *BlockChain         // Canonical block chain
-	engine consensus.Engine    // Consensus engine used for block rewards
+	config     *params.ChainConfig    // Chain configuration options
+	bc         *BlockChain            // Canonical block chain
+	engine     consensus.Engine       // Consensus engine used for block rewards
+	threadpool *parallel.BoundedGroup //threadpool
+}
+
+func (p *StateProcessor) Close() {
+	p.threadpool.Close()
 }
 
 // NewStateProcessor initialises a new StateProcessor.
 func NewStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consensus.Engine) *StateProcessor {
+	bg := parallel.NewBoundedErrGroup(runtime.NumCPU() * 2)
 	return &StateProcessor{
-		config: config,
-		bc:     bc,
-		engine: engine,
+		config:     config,
+		bc:         bc,
+		engine:     engine,
+		threadpool: bg,
 	}
 }
 
@@ -130,7 +137,6 @@ func (p *StateProcessor) processParallel(block *types.Block, statedb *state.Stat
 
 	txLocker := parallel.NewAccessListLocker(block.Transactions())
 
-	eg := parallel.NewBoundedErrGroup(runtime.NumCPU()*2, len(block.Transactions()))
 	var wg sync.WaitGroup
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
@@ -140,7 +146,7 @@ func (p *StateProcessor) processParallel(block *types.Block, statedb *state.Stat
 		i := i
 		tx := tx
 		wg.Add(1)
-		eg.Go(func() {
+		p.threadpool.Go(func() {
 			defer wg.Done()
 			log.Info(fmt.Sprintf("starting goroutine for tx (%s, %d)", tx.Hash(), i))
 			// Grab the locks for every item in the access list. This will block until the transaction

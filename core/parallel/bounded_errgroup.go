@@ -21,10 +21,10 @@ type BoundedGroup struct {
 	closer   chan struct{}
 }
 
-func NewBoundedErrGroup(numWorkers int, maxPendingTasks int) *BoundedGroup {
+func NewBoundedErrGroup(numWorkers int) *BoundedGroup {
 	res := &BoundedGroup{
 		workers: make(chan struct{}, numWorkers),
-		tasks:   make(chan func(), maxPendingTasks),
+		tasks:   make(chan func(), 10000),
 		closer:  make(chan struct{}),
 	}
 	//start the numWorker worker threads
@@ -54,7 +54,7 @@ func (g *BoundedGroup) startWorker() {
 	}
 }
 
-func (g *BoundedGroup) Wait() {
+func (g *BoundedGroup) Close() {
 	// Shut down the worker threads
 	close(g.closer)
 	g.workerWG.Wait()

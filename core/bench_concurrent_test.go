@@ -390,7 +390,7 @@ func GenerateFile(b *testing.B, filepath string, numBlocks int, numTxs int, numC
 
 func ReadFile(b *testing.B, numBlocks int, numTxs int, numContracts int, numKeys int) []*types.Block {
 	gopath := os.Getenv("GOPATH")
-	filepath := gopath + "/src/github.com/ethereum/go-ethereum/core/testing_file.bin"
+	filepath := fmt.Sprintf(gopath+"/src/github.com/ethereum/go-ethereum/core/testing_folder/testing_file_numBlocks_%d.bin", numBlocks)
 	if _, err := os.Stat(filepath); errors.Is(err, os.ErrNotExist) {
 		GenerateFile(b, filepath, numBlocks, numTxs, numContracts, numKeys)
 	}
@@ -407,15 +407,11 @@ func ReadFile(b *testing.B, numBlocks int, numTxs int, numContracts int, numKeys
 }
 
 func BenchmarkParallelExecutionFromFile(b *testing.B) {
-	blocks := ReadFile(b, 1000, 100, 100, 100)
-	for i := 0; i < 5; i++ {
-		benchmarkRandomBlockExecution(b, blocks, len(blocks), 1000, 100, 100, 100, true, true)
-	}
+	blocks := ReadFile(b, 500, 100, 100, 100)
+	benchmarkRandomBlockExecution(b, blocks, len(blocks), 1000, 100, 100, 100, true, true)
 }
 
 func BenchmarkSimpleExecutionFromFile(b *testing.B) {
-	blocks := ReadFile(b, 1000, 100, 100, 100)
-	for i := 0; i < 5; i++ {
-		benchmarkRandomBlockExecution(b, blocks, len(blocks), 1000, 100, 100, 100, true, true)
-	}
+	blocks := ReadFile(b, 500, 100, 100, 100)
+	benchmarkRandomBlockExecution(b, blocks, len(blocks), 1000, 100, 100, 100, true, true)
 }

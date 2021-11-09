@@ -1042,6 +1042,9 @@ func (bc *BlockChain) Stop() {
 		triedb := bc.stateCache.TrieDB()
 		triedb.SaveCache(bc.cacheConfig.TrieCleanJournal)
 	}
+	if sp, ok := bc.processor.(*StateProcessor); ok {
+		sp.Close()
+	}
 	log.Info("Blockchain stopped")
 }
 
